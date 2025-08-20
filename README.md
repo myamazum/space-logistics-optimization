@@ -3,6 +3,7 @@ Space Logistics Optimization in Python. See `docs/tutorials.md` for a quick star
 # For Windows OS
 Installation on a Linux machine is recommended, but for a Windows OS, please try instructions in `windows-installation-guide.md`. The performance on non-Linux machines is not guaranteed.
 
+## Docker on WSL2
 
 # For Linux OS
 ## Prerequisites 
@@ -35,6 +36,12 @@ poetry install
 
 If `virtualenv` or similar is preferred, run `poetry install` in the newly created virtual environment with python version `3.11.2`.
 
+<!-- add mamba 2025/08/19 -->
+If already installed micromamba, run (change the environment name if needed)
+
+```bash
+micromamba env create -n slpy -f environment.yml
+```
 
 # Test
 The installation shell script should let you run tests. However, if you need to run tests after installation, run:

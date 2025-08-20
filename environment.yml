@@ -1,0 +1,24 @@
+name: spacelogistics-py
+channels:
+  - conda-forge
+  - gurobi
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - scipy
+  - pyomo
+  - pygmo_plugins_nonfree
+  - pandas
+  - requests
+  - bidict
+  - icecream
+  - plotly
+  - gurobi
+  - tqdm
+  - setuptools
+  - highspy
+  - pytest
+  - pip:
+    - matplotlib
