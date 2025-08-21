@@ -9,7 +9,7 @@ import warnings
 from dataclasses import dataclass, field
 from bidict import bidict
 from pyomo.environ import SolverFactory
-
+from input_data_class_wrapper import NodeDetailsV2
 
 @dataclass
 class MissionParameters:
