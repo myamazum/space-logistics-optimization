@@ -14,7 +14,6 @@ from .constraints.fixed_sc_design import FixSCDesign
 if TYPE_CHECKING:
     from .opt_model_builder_class import OptModelBuilder
 
-
 class Constraints:
     def __init__(self, builder: OptModelBuilder) -> None:
         self.builder = builder

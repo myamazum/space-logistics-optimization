@@ -86,7 +86,7 @@ def main():
     runtime_settings = RuntimeSettings(
         pwl_increment_list=[2500],  # List of PWL increment to try
         store_results_to_csv=True,  # True if results stored to a .csv file
-        mip_solver="scip",
+        #mip_solver="scip",
         solver_verbose=True,
         max_time=3600 * 3,  # maximum time allowed for optimization in seconds
     )

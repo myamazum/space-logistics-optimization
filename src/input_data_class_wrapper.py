@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional, Iterable, Literal
+from typing import Dict, List, Tuple, Optional, Iterable, Literal, Any
 
 import numpy as np
 
@@ -293,20 +293,14 @@ class NodeDetailsV2(NodeDetails):
 class NetworkBuilderV2(NetworkBuilder):
     """
     Phase A: arc-centric internals while preserving legacy (i,j,t) views.
-
-    - Reads NodeDetailsV2 (or adapts from legacy NodeDetails).
-    - Builds arc list, allowed time windows, alpha (propellant fraction), TOF.
-    - Backfills parent-visible arrays:
-        fin_ini_mass_frac[i,j,t], real_arc_time[i,j], allowed_time_window[(i,j)], delta_t[i,j,t]
-    - Keeps OptModelBuilder unchanged.
-    - Phase A guard: at most ONE transport arc per (dep,arr) pair.
     """
 
-    # ---------------- public ctor ----------------
-
     def __init__(self, input_data: InputData) -> None:
-        # 親の初期化を呼んでおく（従来フィールドが必要な箇所があるため）
+        # 親の初期化（既存フィールド作成）
         super().__init__(input_data)
+        # 親が self.input を使っていない実装に備えてエイリアスを保証
+        if not hasattr(self, "input"):
+            self.input = input_data  # unify name
 
         # ---- Phase A: arc-centric structures (new) ----
         self.arc_list: List[ArcIdx] = []
@@ -317,34 +311,31 @@ class NetworkBuilderV2(NetworkBuilder):
         # Isp (s)
         self._sc_isp = float(self.input.sc.isp)
 
-        # 1) 時間軸が親で未確定なら、ここで確定（保険）
+        # 1) 親が時間軸を持っていなければ作る（保険）
         self._initialize_time_axis_if_needed()
 
-        # 2) NodeDetailsV2（なければ from_parent）からアークを構築
+        # 2) NodeDetailsV2（なければ from_parent）に正規化
         node_cfg_v2 = self._get_node_cfg_v2()
 
+        # 3) アーク/時刻窓/α/TOF を構築
         self._build_arcs_and_windows_from_node_details(node_cfg_v2)
 
-        # 3) 親が期待する (i,j,t) ビューを上書き生成（互換）
+        # 4) 互換ビュー（(i,j,t) 配列）を上書き生成
         self._backfill_legacy_views(node_cfg_v2)
 
     # ------------- helpers (Phase A) -------------
 
     def _initialize_time_axis_if_needed(self) -> None:
-        """
-        親の __init__ が time_steps / mis_start_dates / mis_end_dates を
-        既に作っていれば何もしない。なければ最小構成を作る。
-        """
+        """time_steps / mis_start_dates / mis_end_dates が無ければ最小構成を作る。"""
         if getattr(self, "time_steps", None) and getattr(self, "mis_start_dates", None):
-            return
+            pass
+            #return
 
         mis = self.input.mission
         self.time_interval = int(mis.time_interval)
         self.n_mis = int(mis.n_mis)
-
         self.mis_start_dates = [m * self.time_interval for m in range(self.n_mis)]
         self.mis_end_dates = [s + 1 for s in self.mis_start_dates]
-
         # e.g., [0, 1, 365, 366, ...] （各ミッション：start/endの2スロット）
         self.time_steps = []
         for s, e in zip(self.mis_start_dates, self.mis_end_dates):
@@ -361,43 +352,25 @@ class NetworkBuilderV2(NetworkBuilder):
     def _build_arcs_and_windows_from_node_details(self, node_cfg_v2: NodeDetailsV2) -> None:
         """NodeDetailsV2 から arc_list / allowed_times_by_arc を組み立て。"""
         name2id = {name: i for i, name in enumerate(node_cfg_v2.node_names)}
+        self.arc_list.clear(); self.arcs_by_dep.clear(); self.arcs_by_arr.clear()
 
         # 1) ArcSpec → ArcIdx
-        self.arc_list.clear()
-        self.arcs_by_dep.clear()
-        self.arcs_by_arr.clear()
-
         for aid, a in enumerate(node_cfg_v2.arcs):
-            dep = name2id[a.dep]
-            arr = name2id[a.arr]
+            dep = name2id[a.dep]; arr = name2id[a.arr]
             tof = float(a.tof_days or 0.0)
-            dv = float(a.delta_v_ms or 0.0)
-            if a.kind == "transport":
-                alpha = 1.0 - math.exp(-dv / (self._sc_isp * G0))
-            else:
-                alpha = 0.0
-            arc = ArcIdx(
-                id=aid,
-                dep=dep,
-                arr=arr,
-                kind=a.kind,
-                tof_days=tof,
-                dv_ms=dv,
-                alpha=alpha,
-                max_parallel=a.max_parallel,
-                notes=a.notes,
-            )
+            dv  = float(a.delta_v_ms or 0.0)
+            alpha = 1.0 - math.exp(-dv / (self._sc_isp * G0)) if a.kind == "transport" else 0.0
+            arc = ArcIdx(aid, dep, arr, a.kind, tof, dv, alpha, a.max_parallel, a.notes)
             self.arc_list.append(arc)
             self.arcs_by_dep[dep].append(aid)
             self.arcs_by_arr[arr].append(aid)
 
-        # 2) 時刻窓（(dep,arr)->[t]）を展開し、arc_id へ割当
+        # 2) (dep,arr)->[t] の時刻窓を展開し、arc_id へ割当
         allowed_map = node_cfg_v2.expand_allowed_times(
             mission_starts=self.mis_start_dates,
             mission_ends=self.mis_end_dates,
             time_grid=self.time_steps,
         )
-
         self.allowed_times_by_arc.clear()
         for arc in self.arc_list:
             key = (node_cfg_v2.node_names[arc.dep], node_cfg_v2.node_names[arc.arr])
@@ -418,45 +391,71 @@ class NetworkBuilderV2(NetworkBuilder):
 
     def _backfill_legacy_views(self, node_cfg_v2: NodeDetailsV2) -> None:
         """
-        親クラス／OptModelBuilder が参照する (i,j,t) 配列を
-        arc_list から上書き構築して、動作を互換に保つ。
+        親／OptModelBuilder が参照する (i,j,t) 配列を arc_list から上書き構築。
         """
-        N = len(node_cfg_v2.node_names)
-        T = len(self.time_steps)
-
-        # 既存が期待する属性をすべて上書き作成
+        N, T = len(node_cfg_v2.node_names), len(self.time_steps)
         self.fin_ini_mass_frac = np.zeros((N, N, T), dtype=float)   # α[i,j,t]
-        self.real_arc_time = np.zeros((N, N), dtype=float)          # TOF[i,j]
+        self.real_arc_time     = np.zeros((N, N), dtype=float)      # TOF[i,j]
         self.allowed_time_window: Dict[Tuple[int, int], List[int]] = {}
-        self.delta_t = np.zeros((N, N, T), dtype=int)               # holdover 用
+        self.delta_t           = np.zeros((N, N, T), dtype=int)     # holdover 用
 
-        # 1) 輸送アークの α・TOF・許可時刻を (i,j) に転写
+        # 1) 輸送アーク：α, TOF, 許可時刻
         for arc in self.arc_list:
             i, j = arc.dep, arc.arr
             if arc.kind == "transport":
-                self.fin_ini_mass_frac[i, j, :] = arc.alpha           # 時間一定なら全スライス同値
+                self.fin_ini_mass_frac[i, j, :] = arc.alpha
                 self.real_arc_time[i, j] = arc.tof_days
                 self.allowed_time_window[(i, j)] = list(self.allowed_times_by_arc.get(arc.id, []))
 
-        # 2) ホールドオーバ自己ループの Δt（従来規約：start→interval-1, end→1）
-        #    従来 NodeDetails.holdover_nodes がなければ NodeSpec.holdover から導出
+        # 2) ホールドオーバ自己ループの Δt と許可時刻（← 追加）
         legacy_holdovers = set(getattr(self.input.node, "holdover_nodes", []) or [])
         if not legacy_holdovers and getattr(node_cfg_v2, "nodes", None):
             legacy_holdovers = {ns.name for ns in node_cfg_v2.nodes if getattr(ns, "holdover", False)}
 
-        for n, name in enumerate(node_cfg_v2.node_names):
-            if name in legacy_holdovers:
-                for tidx, t in enumerate(self.time_steps):
-                    if t in self.mis_start_dates:
-                        self.delta_t[n, n, tidx] = self.time_interval - 1
-                    elif t in self.mis_end_dates:
-                        self.delta_t[n, n, tidx] = 1
-                    else:
-                        self.delta_t[n, n, tidx] = 1
+        name_by_id = {i: n for i, n in enumerate(node_cfg_v2.node_names)}
+        for arc in self.arc_list:
+            if arc.kind == "holdover":
+                n = arc.dep  # dep==arr
+                # Δt（従来規約：start→interval-1, end→1）
+                if name_by_id[n] in legacy_holdovers:
+                    for tidx, t in enumerate(self.time_steps):
+                        if t in self.mis_start_dates:
+                            self.delta_t[n, n, tidx] = self.time_interval - 1
+                        elif t in self.mis_end_dates:
+                            self.delta_t[n, n, tidx] = 1
+                        else:
+                            self.delta_t[n, n, tidx] = 1
+                # 許可時刻（V2が窓を持っていればそれ、無ければ全時刻）
+                times = self.allowed_times_by_arc.get(arc.id)
+                self.allowed_time_window[(n, n)] = list(times) if times is not None else list(self.time_steps)
 
-        # 3) 互換ユーティリティ：feasible な (i,j) ペアの集合
+        # 3) feasible (i,j) の集合
         self._feasible_pair = {(arc.dep, arc.arr) for arc in self.arc_list}
 
-    # 親の is_feasible_arc を、V2の feasible pair に置き換え（OptModelBuilder 互換のため）
+    # 互換: 親の is_feasible_arc を V2の情報で上書き
     def is_feasible_arc(self, dep_node_id: int, arr_node_id: int) -> bool:
         return (dep_node_id, arr_node_id) in getattr(self, "_feasible_pair", set())
+
+    def can_operate_ISRU_arc(self, a_id: int) -> bool:
+        """Arc 単位の ISRU 可否（Phase B 用）。"""
+        # グローバルに ISRU を使わない設定なら不可
+        if not getattr(self.input.isru, "use_isru", False):
+            return False
+
+        arc = self.arc_list[a_id]
+        # ISRU はホールドオーバ自己ループ上だけ
+        if arc.kind != "holdover" or arc.dep != arc.arr:
+            return False
+
+        # ノードが ISRU サイトかどうか（NodeSpec.attrs["isru_site"]=True を推奨）
+        node_name = self.node_names[arc.dep]
+        isru_site_flag = False
+        # NodeDetailsV2.nodes から属性を読む
+        if hasattr(self.input.node, "nodes"):
+            for ns in self.input.node.nodes:
+                if ns.name == node_name:
+                    isru_site_flag = bool(getattr(ns, "attrs", {}).get("isru_site", False))
+                    break
+
+        # 後方互換：attrs が無い場合は、従来どおり "LS" を ISRU サイト扱い
+        return isru_site_flag or (node_name == "LS")
