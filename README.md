@@ -47,7 +47,7 @@ micromamba env create -n slpy -f environment.yml
 The installation shell script should let you run tests. However, if you need to run tests after installation, run:
 
 ```sh
-pytest
+PYTHONPATH=src pytest
 ```
 
 # Class Diagram
