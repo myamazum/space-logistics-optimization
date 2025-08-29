@@ -22,14 +22,46 @@ class Constraints:
         nb = self.builder._network_def
 
         m.A = range(len(nb.arc_list))           # arc index
-        m.T = range(len(nb.time_steps))
+        # Use actual time values (consistent with variable keys)
+        m.T = list(self.builder.time_steps)
         OUT = self.builder.flow_dict["out"]; INN = self.builder.flow_dict["in"]
 
         # arc → 属性
         arc_allowed = {a.id: set(nb.allowed_times_by_arc.get(a.id, [])) for a in nb.arc_list}
         arc_alpha   = {a.id: a.alpha for a in nb.arc_list}
+        arc_kind    = {a.id: a.kind  for a in nb.arc_list}
 
-        # 変数は許可された (arc,time) のみ生成しているため、窓外の 0 固定は不要
+        # v1 互換: 時刻窓外の 0 固定（変数は全 (arc,time) で生成する前提）
+        m.int_time_window_const = constraint_dict()
+        m.cnt_time_window_const = constraint_dict()
+        m.sc_time_window_const  = constraint_dict()
+        m.scvar_time_window_const = constraint_dict()
+        for a in m.A:
+            not_allowed_times = [t for t in m.T if t not in arc_allowed.get(a, set())]
+            if not not_allowed_times:
+                continue
+            for t in not_allowed_times:
+                for d in m.sc_des_idx:
+                    for p in m.sc_copy_idx:
+                        # flows (both io)
+                        for io in m.io_idx:
+                            for ic in m.int_com_idx:
+                                m.int_time_window_const[d,p,a,ic,io,t] = constraint(
+                                    m.int_com[d,p,a,ic,io,t] == 0
+                                )
+                            for cc in m.cnt_com_idx:
+                                m.cnt_time_window_const[d,p,a,cc,io,t] = constraint(
+                                    m.cnt_com[d,p,a,cc,io,t] == 0
+                                )
+                        # spacecraft presence and linked value variables (both io)
+                        for io in m.io_idx:
+                            m.sc_time_window_const[d,p,a,io,t] = constraint(
+                                m.sc_fly_ind[d,p,a,io,t] == 0
+                            )
+                            for sv in m.sc_var_idx:
+                                m.scvar_time_window_const[d,p,sv,a,io,t] = constraint(
+                                    m.sc_fly_var[d,p,sv,a,io,t] == 0
+                                )
 
         # ---- SCBigM（飛ぶときだけ dry/payload/propellant を有効化）----
         SD = self.builder.sc_var_dict
@@ -46,27 +78,28 @@ class Constraints:
                     continue
                 for d in m.sc_des_idx:
                     for p in m.sc_copy_idx:
-                        y = m.sc_fly_ind[d,p,a,t]
-                        # dry
-                        x = m.sc_fly_var[d,p,SD["dry mass"],a,t]
-                        m.c_dm_up   [d,p,a,t] = constraint(x <= DM_UB * y)
-                        m.c_dm_lo0  [d,p,a,t] = constraint(x >= 0)
-                        m.c_dm_cap  [d,p,a,t] = constraint(x <= m.dry_mass[d])
-                        m.c_dm_eq   [d,p,a,t] = constraint(x >= m.dry_mass[d] - DM_UB*(1-y))
-                        # payload
-                        x = m.sc_fly_var[d,p,SD["payload"],a,t]
-                        m.c_pl_up   [d,p,a,t] = constraint(x <= PL_UB * y)
-                        m.c_pl_lo0  [d,p,a,t] = constraint(x >= 0)
-                        m.c_pl_cap  [d,p,a,t] = constraint(x <= m.pl_cap[d])
-                        m.c_pl_eq   [d,p,a,t] = constraint(x >= m.pl_cap[d] - PL_UB*(1-y))
-                        # propellant
-                        x = m.sc_fly_var[d,p,SD["propellant"],a,t]
-                        m.c_pr_up   [d,p,a,t] = constraint(x <= PR_UB * y)
-                        m.c_pr_lo0  [d,p,a,t] = constraint(x >= 0)
-                        m.c_pr_cap  [d,p,a,t] = constraint(x <= m.prop_cap[d])
-                        m.c_pr_eq   [d,p,a,t] = constraint(x >= m.prop_cap[d] - PR_UB*(1-y))
+                        for io in m.io_idx:
+                            y = m.sc_fly_ind[d,p,a,io,t]
+                            # dry
+                            x = m.sc_fly_var[d,p,SD["dry mass"],a,io,t]
+                            m.c_dm_up   [d,p,a,io,t] = constraint(x <= DM_UB * y)
+                            m.c_dm_lo0  [d,p,a,io,t] = constraint(x >= 0)
+                            m.c_dm_cap  [d,p,a,io,t] = constraint(x <= m.dry_mass[d])
+                            m.c_dm_eq   [d,p,a,io,t] = constraint(x >= m.dry_mass[d] - DM_UB*(1-y))
+                            # payload
+                            x = m.sc_fly_var[d,p,SD["payload"],a,io,t]
+                            m.c_pl_up   [d,p,a,io,t] = constraint(x <= PL_UB * y)
+                            m.c_pl_lo0  [d,p,a,io,t] = constraint(x >= 0)
+                            m.c_pl_cap  [d,p,a,io,t] = constraint(x <= m.pl_cap[d])
+                            m.c_pl_eq   [d,p,a,io,t] = constraint(x >= m.pl_cap[d] - PL_UB*(1-y))
+                            # propellant
+                            x = m.sc_fly_var[d,p,SD["propellant"],a,io,t]
+                            m.c_pr_up   [d,p,a,io,t] = constraint(x <= PR_UB * y)
+                            m.c_pr_lo0  [d,p,a,io,t] = constraint(x >= 0)
+                            m.c_pr_cap  [d,p,a,io,t] = constraint(x <= m.prop_cap[d])
+                            m.c_pr_eq   [d,p,a,io,t] = constraint(x >= m.prop_cap[d] - PR_UB*(1-y))
 
-        # ---- SCCapacity（非推薬と推進剤の容量上限）----
+        # ---- SCCapacity（非推薬と推進剤の容量上限：各機体ごと）----
         prop_names = set(self.builder.prop_com_names)           # {"oxygen","hydrogen"}
         is_prop = lambda k: (self.builder.cnt_com_names[k] in prop_names)
 
@@ -75,57 +108,154 @@ class Constraints:
             for t in m.T:
                 if t not in arc_allowed[a]:
                     continue
-                # 非推薬 out の合計 ≤ 飛んだ機体の payload cap 合計
-                payload_out = (
-                    sum(
-                        m.cnt_com[d,p,a,k,OUT,t]
-                        for d in m.sc_des_idx for p in m.sc_copy_idx for k in m.cnt_com_idx
-                        if not is_prop(k)
-                    )
-                    + sum(
-                        float(self.builder.int_com_costs[i]) * m.int_com[d,p,a,i,OUT,t]
-                        for d in m.sc_des_idx for p in m.sc_copy_idx for i in m.int_com_idx
-                    )
-                )
-                payload_cap = sum(m.sc_fly_var[d,p,SD["payload"],a,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                m.c_sc_payload[a,t] = constraint(payload_out <= payload_cap)
+                for d in m.sc_des_idx:
+                    for p in m.sc_copy_idx:
+                        # 非推薬 out の合計（当該機体） ≤ その機体の payload cap
+                        payload_out_dp = (
+                            sum(
+                                m.cnt_com[d,p,a,k,OUT,t]
+                                for k in m.cnt_com_idx if not is_prop(k)
+                            )
+                            + sum(
+                                float(self.builder.int_com_costs[i]) * m.int_com[d,p,a,i,OUT,t]
+                                for i in m.int_com_idx
+                            )
+                        )
+                        m.c_sc_payload[d,p,a,t] = constraint(
+                            payload_out_dp <= m.sc_fly_var[d,p,SD["payload"],a,OUT,t]
+                        )
 
-                # 推進剤（O2+H2） out の合計 ≤ 飛んだ機体の prop cap 合計
-                o2, h2 = self.builder.cnt_com_dict["oxygen"], self.builder.cnt_com_dict["hydrogen"]
-                prop_out = sum(m.cnt_com[d,p,a,c,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx for c in (o2,h2))
-                prop_cap = sum(m.sc_fly_var[d,p,SD["propellant"],a,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                m.c_sc_prop[a,t] = constraint(prop_out <= prop_cap)
+                        # 推進剤（O2+H2） out の合計（当該機体） ≤ その機体の propellant cap
+                        o2, h2 = self.builder.cnt_com_dict["oxygen"], self.builder.cnt_com_dict["hydrogen"]
+                        prop_cap_dp = m.sc_fly_var[d,p,SD["propellant"],a,OUT,t]
+                        prop_out_dp = m.cnt_com[d,p,a,o2,OUT,t] + m.cnt_com[d,p,a,h2,OUT,t]
+                        m.c_sc_prop[d,p,a,t] = constraint(prop_out_dp <= prop_cap_dp)
 
-        # ---- PropellantConservation（ロケット方程式の燃焼要求）----
-        # O2/H2 比率は SC パラメータから取得（他箇所と整合）
-        phi_O2 = float(self.builder.sc.oxi_prop_ratio)
-        phi_H2 = float(self.builder.sc.fuel_prop_ratio)
-        int_cost = self.builder.int_com_costs
-        o2, h2 = self.builder.cnt_com_dict["oxygen"], self.builder.cnt_com_dict["hydrogen"]
-        m.c_burn_O2 = constraint_dict(); m.c_burn_H2 = constraint_dict()
+                        # 組成比キャップ（O2/H2 は各割合以内）
+                        m.c_sc_o2_ratio = getattr(m, 'c_sc_o2_ratio', constraint_dict())
+                        m.c_sc_h2_ratio = getattr(m, 'c_sc_h2_ratio', constraint_dict())
+                        m.c_sc_o2_ratio[d,p,a,t] = constraint(
+                            m.cnt_com[d,p,a,o2,OUT,t] <= self.builder.sc.oxi_prop_ratio * prop_cap_dp
+                        )
+                        m.c_sc_h2_ratio[d,p,a,t] = constraint(
+                            m.cnt_com[d,p,a,h2,OUT,t] <= self.builder.sc.fuel_prop_ratio * prop_cap_dp
+                        )
+
+        # ---- v1-style conservation/consumption constraints ----
+        # Integer commodity conservation (crew) per arc/time: IN == OUT
+        m.int_com_mass_cnsv = constraint_dict()
+        crew_id = self.builder.int_com_dict.get("crew #", None)
+        if crew_id is not None:
+            for a in m.A:
+                for t in m.T:
+                    m.int_com_mass_cnsv[a, t] = constraint(
+                        sum(m.int_com[d,p,a,crew_id,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                        ==
+                        sum(m.int_com[d,p,a,crew_id,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                    )
+
+        # Spacecraft conservation: for each SC design/copy and arc/time: IN == OUT
+        m.sc_cnsv = constraint_dict()
         for a in m.A:
-            alpha = arc_alpha[a]
-            if alpha <= 0.0:
-                continue  # 非輸送アークは不要
             for t in m.T:
-                if t not in arc_allowed[a]:
-                    continue
-                dry = sum(m.sc_fly_var[d,p,SD["dry mass"],a,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                nonprop = sum(
-                    m.cnt_com[d,p,a,k,OUT,t]
-                    for d in m.sc_des_idx for p in m.sc_copy_idx for k in m.cnt_com_idx
-                    if not is_prop(k)
-                )
-                int_mass = sum(float(int_cost[i]) * m.int_com[d,p,a,i,OUT,t]
-                            for d in m.sc_des_idx for p in m.sc_copy_idx for i in m.int_com_idx)
-                burn = alpha * (dry + nonprop + int_mass)
+                for d in m.sc_des_idx:
+                    for p in m.sc_copy_idx:
+                        m.sc_cnsv[d,p,a,t] = constraint(
+                            m.sc_fly_ind[d,p,a,INN,t] == m.sc_fly_ind[d,p,a,OUT,t]
+                        )
 
-                m.c_burn_O2[a,t] = constraint(
-                    sum(m.cnt_com[d,p,a,o2,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx) >= phi_O2 * burn
-                )
-                m.c_burn_H2[a,t] = constraint(
-                    sum(m.cnt_com[d,p,a,h2,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx) >= phi_H2 * burn
-                )
+        # Continuous commodities (non-propellant) conservation and consumption
+        m.cnt_com_cnsv = constraint_dict()
+        for a in m.A:
+            i = nb.arc_list[a].dep; j = nb.arc_list[a].arr
+            for t in m.T:
+                t_id = nb.date_to_time_idx_dict[t]
+                for cc in m.cnt_com_idx:
+                    name = self.builder.cnt_com_names[cc]
+                    if name in self.builder.prop_com_names:
+                        continue
+                    if name == "plant":
+                        if self.builder.can_operate_ISRU(a):
+                            m.cnt_com_cnsv[a,cc,t] = constraint(
+                                sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                ==
+                                sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                * (1 - (self.builder.isru.decay_rate * self.builder.isru_work_time[i][t_id] / 365.0))
+                            )
+                        else:
+                            m.cnt_com_cnsv[a,cc,t] = constraint(
+                                sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                ==
+                                sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            )
+                    elif name == "maintenance":
+                        if arc_kind[a] == "transport":
+                            m.cnt_com_cnsv[a,cc,t] = constraint(
+                                sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                ==
+                                sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                - self.builder.mis.maintenance_cost
+                                * sum(m.sc_fly_var[d,p,SD["dry mass"],a,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            )
+                        elif self.builder.can_operate_ISRU(a):
+                            m.cnt_com_cnsv[a,cc,t] = constraint(
+                                sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                ==
+                                sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                - (self.builder.isru.maintenance_cost * self.builder.isru_work_time[i][t_id] / 365.0)
+                                * sum(m.cnt_com[d,p,a,self.builder.cnt_com_dict["plant"],OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            )
+                        else:
+                            m.cnt_com_cnsv[a,cc,t] = constraint(
+                                sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                                ==
+                                sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            )
+                    elif name == "consumption":
+                        m.cnt_com_cnsv[a,cc,t] = constraint(
+                            sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            ==
+                            sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            - self.builder.mis.consumption_cost
+                            * self.builder._network_def.real_arc_time[i][j]
+                            * sum(m.int_com[d,p,a,self.builder.int_com_dict["crew #"],OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                        )
+                    else:
+                        m.cnt_com_cnsv[a,cc,t] = constraint(
+                            sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            ==
+                            sum(m.cnt_com[d,p,a,cc,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                        )
+
+        # Propellant conservation and consumption (v1-style)
+        m.prop_mass_cnsv = constraint_dict()
+        for a in m.A:
+            i = nb.arc_list[a].dep; j = nb.arc_list[a].arr
+            for t in m.T:
+                t_id = nb.date_to_time_idx_dict[t]
+                for prop_name in self.builder.prop_com_names:
+                    prop_id = self.builder.cnt_com_dict[prop_name]
+                    if self.builder.can_operate_ISRU(a):
+                        ratio = (self.builder.isru.H2_H2O_ratio if prop_name == "hydrogen" else self.builder.isru.O2_H2O_ratio)
+                        m.prop_mass_cnsv[a, prop_id, t] = constraint(
+                            sum(m.cnt_com[d,p,a,prop_id,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            <=
+                            sum(m.cnt_com[d,p,a,prop_id,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            + (self.builder.isru_work_time[i][t_id] / 365.0) * ratio * m.isru_mass[t] * self.builder.isru.production_rate
+                        )
+                    else:
+                        prop_ratio = (self.builder.sc.fuel_prop_ratio if prop_name == "hydrogen" else self.builder.sc.oxi_prop_ratio)
+                        m.prop_mass_cnsv[a, prop_id, t] = constraint(
+                            sum(m.cnt_com[d,p,a,prop_id,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            <=
+                            sum(m.cnt_com[d,p,a,prop_id,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            - prop_ratio * self.builder.fin_ini_mass_frac[i][j][t_id]
+                            * (
+                                sum(float(self.builder.int_com_costs[ii]) * m.int_com[d,p,a,ii,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx for ii in m.int_com_idx)
+                                + sum(m.cnt_com[d,p,a,kk,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx for kk in m.cnt_com_idx)
+                                + sum(m.sc_fly_var[d,p,SD["dry mass"],a,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                            )
+                        )
         
         if self.builder.mode == "Piecewise Linear Approx":
             PiecewiseLinearConstraintsV2(self.builder).set_piecewise_linear_constraints(
@@ -133,6 +263,117 @@ class Constraints:
             )
         if self.builder.mode == "fixedSCdesign":
             FixSCDesignV2(self.builder).fix_sc_design(m)
+
+        # ---- Mass Balance & SC Continuity (minimal v2) ----
+        m.int_balance = constraint_dict(); m.cnt_balance = constraint_dict(); m.sc_balance = constraint_dict()
+        date_to_idx = nb.date_to_time_idx_dict
+        # Node-level balances using arc sets
+        for n in range(self.builder.n_nodes):
+            dep_arcs = nb.arcs_by_dep.get(n, [])
+            arr_arcs = nb.arcs_by_arr.get(n, [])
+            for t in m.T:
+                t_id = date_to_idx[t]
+                # Integer commodities
+                for ic in m.int_com_idx:
+                    out_sum = sum(
+                        m.int_com[d,p,a,ic,OUT,t]
+                        for a in dep_arcs if t in arc_allowed.get(a, set())
+                        for d in m.sc_des_idx for p in m.sc_copy_idx
+                    )
+                    in_sum = 0
+                    for a in arr_arcs:
+                        i = m.arc_dep[a]; j = m.arc_arr[a]
+                        dt = int(nb.delta_t[i][j][t_id]) if 0 <= t_id < len(self.builder.time_steps) else 0
+                        prev_t = t - dt
+                        if prev_t in arc_allowed.get(a, set()):
+                            in_sum += sum(
+                                m.int_com[d,p,a,ic,INN,prev_t]
+                                for d in m.sc_des_idx for p in m.sc_copy_idx
+                            )
+                    rhs = nb.int_com_demand[n][ic][t_id]
+                    m.int_balance[n, ic, t] = constraint(out_sum - in_sum <= rhs)
+
+                # Continuous commodities
+                for cc in m.cnt_com_idx:
+                    out_sum = sum(
+                        m.cnt_com[d,p,a,cc,OUT,t]
+                        for a in dep_arcs if t in arc_allowed.get(a, set())
+                        for d in m.sc_des_idx for p in m.sc_copy_idx
+                    )
+                    in_sum = 0
+                    for a in arr_arcs:
+                        i = m.arc_dep[a]; j = m.arc_arr[a]
+                        dt = int(nb.delta_t[i][j][t_id]) if 0 <= t_id < len(self.builder.time_steps) else 0
+                        prev_t = t - dt
+                        if prev_t in arc_allowed.get(a, set()):
+                            in_sum += sum(
+                                m.cnt_com[d,p,a,cc,INN,prev_t]
+                                for d in m.sc_des_idx for p in m.sc_copy_idx
+                            )
+                    rhs = nb.cnt_com_demand[n][cc][t_id]
+                    m.cnt_balance[n, cc, t] = constraint(out_sum - in_sum <= rhs)
+
+                # Spacecraft continuity (per design/copy)
+                for d in m.sc_des_idx:
+                    for p in m.sc_copy_idx:
+                        out_sc = sum(
+                            m.sc_fly_ind[d,p,a,OUT,t]
+                            for a in dep_arcs if t in arc_allowed.get(a, set())
+                        )
+                        in_sc = 0
+                        for a in arr_arcs:
+                            i = m.arc_dep[a]; j = m.arc_arr[a]
+                            dt = int(nb.delta_t[i][j][t_id]) if 0 <= t_id < len(self.builder.time_steps) else 0
+                            prev_t = t - dt
+                            if prev_t in arc_allowed.get(a, set()):
+                                in_sc += m.sc_fly_ind[d,p,a,INN,prev_t]
+                        cap = 1 if n == self.builder.node_dict["Earth"] else 0
+                        m.sc_balance[d, p, n, t] = constraint(out_sc - in_sc <= cap)
+
+        # NOTE: Do not restrict a spacecraft to at most one arc per time.
+        # In this model, arcs are instantaneous per mission boundary; a craft may
+        # traverse multiple arcs within the same time bucket. Keeping this
+        # unrestricted preserves feasibility for path-graph missions.
+
+        # ---- Flow propagation along arcs (IN at arrival equals OUT at departure shifted by Δt) ----
+        m.int_flow_link = constraint_dict(); m.cnt_flow_link = constraint_dict()
+        for a in m.A:
+            i = m.arc_dep[a]; j = m.arc_arr[a]
+            for t in m.T:
+                if t not in arc_allowed.get(a, set()):
+                    continue
+                t_id = date_to_idx[t]
+                dt = int(nb.delta_t[i][j][t_id]) if 0 <= t_id < len(self.builder.time_steps) else 0
+                prev_t = t - dt
+                if prev_t not in arc_allowed.get(a, set()):
+                    # If the shifted time is not allowed, no flow can occur at t
+                    # Implicitly enforced since variables are only created for allowed (a, time)
+                    continue
+                for ic in m.int_com_idx:
+                    m.int_flow_link[a, ic, t] = constraint(
+                        sum(m.int_com[d,p,a,ic,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                        ==
+                        sum(m.int_com[d,p,a,ic,OUT,prev_t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                    )
+                for cc in m.cnt_com_idx:
+                    m.cnt_flow_link[a, cc, t] = constraint(
+                        sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                        ==
+                        sum(m.cnt_com[d,p,a,cc,OUT,prev_t] for d in m.sc_des_idx for p in m.sc_copy_idx)
+                    )
+
+        # ---- Arc parallelism cap (if specified per arc) ----
+        m.arc_parallel_cap = constraint_dict()
+        for a in m.A:
+            cap = nb.arc_list[a].max_parallel
+            if cap is None:
+                continue
+            for t in m.T:
+                if t not in arc_allowed.get(a, set()):
+                    continue
+                m.arc_parallel_cap[a,t] = constraint(
+                    sum(m.sc_fly_ind[d,p,a,OUT,t] for d in m.sc_des_idx for p in m.sc_copy_idx) <= cap
+                )
 
         return m
 

@@ -243,26 +243,22 @@ class Variables:
         m.sc_fly_var = variable_dict()
 
         # 変数添字： (dep,arr) → arc に置換
+        # v1 と同様、全ての (arc,time) に対して変数を生成し、
+        # 時刻窓外は制約で 0 固定する（v2 はもともと生成を絞っていた）。
         for sc_des, sc_cp, a, io, t in product(
                 m.sc_des_idx, m.sc_copy_idx, m.arc_idx, m.io_idx, m.time_idx):
-            # 時刻窓でフィルタ（その arc が t に許可されていなければ skip）
-            if t not in m.arc_allowed_times[a]:
-                continue
-
             # 整数/連続フロー
             for pl_i in m.int_com_idx:
                 m.int_com[sc_des, sc_cp, a, pl_i, io, t] = variable(domain=NonNegativeIntegers)
             for pl_c in m.cnt_com_idx:
                 m.cnt_com[sc_des, sc_cp, a, pl_c, io, t] = variable(domain=NonNegativeReals)
 
-        # フライト指示 と 連結用の“飛ぶときだけ値を持つ”実体（io に依存しないので別ループで作成）
-        for sc_des, sc_cp, a, t in product(
-                m.sc_des_idx, m.sc_copy_idx, m.arc_idx, m.time_idx):
-            if t not in m.arc_allowed_times[a]:
-                continue
-            m.sc_fly_ind[sc_des, sc_cp, a, t] = variable(domain=Binary)
+        # フライト指示 と 連結用の“飛ぶときだけ値を持つ”実体（io を含む）
+        for sc_des, sc_cp, a, io, t in product(
+                m.sc_des_idx, m.sc_copy_idx, m.arc_idx, m.io_idx, m.time_idx):
+            m.sc_fly_ind[sc_des, sc_cp, a, io, t] = variable(domain=Binary)
             for sc_var in m.sc_var_idx:  # "dry mass","payload","propellant"
-                m.sc_fly_var[sc_des, sc_cp, sc_var, a, t] = variable(domain=NonNegativeReals)
+                m.sc_fly_var[sc_des, sc_cp, sc_var, a, io, t] = variable(domain=NonNegativeReals)
 
         self.builder.idx_name_dict["int_com"] = [
             "sc_des",
@@ -284,6 +280,7 @@ class Variables:
             "sc_des",
             "sc_cp",
             "arc",
+            "io",
             "time",
         ]
         self.builder.idx_name_dict["sc_fly_var"] = [
@@ -291,6 +288,7 @@ class Variables:
             "sc_cp",
             "sc_var",
             "arc",
+            "io",
             "time",
         ]
         return m
