@@ -335,32 +335,10 @@ class Constraints:
         # traverse multiple arcs within the same time bucket. Keeping this
         # unrestricted preserves feasibility for path-graph missions.
 
-        # ---- Flow propagation along arcs (IN at arrival equals OUT at departure shifted by Δt) ----
+        # ---- Flow propagation along arcs ----
+        # v1 互換モードではノード収支と時刻窓で整合をとるため、
+        # ここでのアーク間の等式連結は設定しない（過拘束回避）。
         m.int_flow_link = constraint_dict(); m.cnt_flow_link = constraint_dict()
-        for a in m.A:
-            i = m.arc_dep[a]; j = m.arc_arr[a]
-            for t in m.T:
-                if t not in arc_allowed.get(a, set()):
-                    continue
-                t_id = date_to_idx[t]
-                dt = int(nb.delta_t[i][j][t_id]) if 0 <= t_id < len(self.builder.time_steps) else 0
-                prev_t = t - dt
-                if prev_t not in arc_allowed.get(a, set()):
-                    # If the shifted time is not allowed, no flow can occur at t
-                    # Implicitly enforced since variables are only created for allowed (a, time)
-                    continue
-                for ic in m.int_com_idx:
-                    m.int_flow_link[a, ic, t] = constraint(
-                        sum(m.int_com[d,p,a,ic,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                        ==
-                        sum(m.int_com[d,p,a,ic,OUT,prev_t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                    )
-                for cc in m.cnt_com_idx:
-                    m.cnt_flow_link[a, cc, t] = constraint(
-                        sum(m.cnt_com[d,p,a,cc,INN,t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                        ==
-                        sum(m.cnt_com[d,p,a,cc,OUT,prev_t] for d in m.sc_des_idx for p in m.sc_copy_idx)
-                    )
 
         # ---- Arc parallelism cap (if specified per arc) ----
         m.arc_parallel_cap = constraint_dict()

@@ -80,7 +80,7 @@ class Objective:
         # 機体乾燥重量（dry mass）は重み1で加算
         SD = self.builder.sc_var_dict  # {"dry mass":..., "payload":..., "propellant":...}
         term_dry = sum(
-            m.sc_fly_var[sc_des, sc_cp, SD["dry mass"], a, t]
+            m.sc_fly_var[sc_des, sc_cp, SD["dry mass"], a, OUT, t]
             for a in A_E2L
             for sc_des in m.sc_des_idx
             for sc_cp in m.sc_copy_idx
