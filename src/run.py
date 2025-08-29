@@ -21,7 +21,7 @@ from input_data_class import (
     NodeDetails,
     RuntimeSettings,
 )
-
+import numpy as np
 
 def main():
     mission_parameters = MissionParameters(
@@ -99,8 +99,11 @@ def main():
         node=node_details,
         runtime=runtime_settings,
     )
+
+    #fixed_sc_vars=np.array([[1683,16977,7227],[1876,4492,5420]])
+    fixed_sc_vars=np.array([[3978,198580,24745],[3978,198580,24745]])
+
     SpaceLogistics(input_data).optimizer.pwl.solve_w_pwl_approx(pwl_increment=2500)
-
-
+    #SpaceLogistics(input_data).optimizer.fixed_sc.solve_network_flow_MILP(fixed_sc_vars=fixed_sc_vars)
 if __name__ == "__main__":
     main()
